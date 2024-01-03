@@ -1,4 +1,6 @@
 require('dotenv').config();
+const LocalStrategy = require('passport-local').Strategy;
+const bcrypt = require('bcrypt');
 
 const { Pool } = require('pg');
  
@@ -10,16 +12,72 @@ const pool = new Pool({
     port: process.env.DB_PORT,
 });
 
+const initializePassport = (passport) => {
+  passport.use(
+    new LocalStrategy(
+      {
+        usernameField: 'username',
+        passwordField: 'password',
+      },
+      async (username, password, done) => {
+        try {
+          const result = await pool.query('SELECT * FROM users WHERE username = $1', [username]);
+
+          if (!result.rows.length) {
+            //console.log('User not found:', username);
+            return done(null, false, { message: 'Incorrect username.' });
+          }
+
+          const user = result.rows[0];
+          //console.log('Hashed Password:', user.password);
+
+          const passwordMatch = await bcrypt.compare(password, user.password);
+
+          if (!passwordMatch) {
+            //console.log('Incorrect password for user:', username);
+            return done(null, false, { message: 'Incorrect password.' });
+          }
+
+          //console.log('User authenticated:', username);
+          return done(null, user);
+        } catch (err) {
+          //console.error('Error during authentication:', err.message);
+          return done(err);
+        }
+      }
+    )
+  );
+
+  passport.serializeUser((user, done) => {
+    done(null, user.id);
+  });
+
+  passport.deserializeUser(async (id, done) => {
+    try {
+      const result = await pool.query('SELECT * FROM users WHERE id = $1', [id]);
+
+      if (!result.rows.length) {
+        return done(null, false, { message: 'User not found.' });
+      }
+
+      const user = result.rows[0];
+      return done(null, user);
+    } catch (err) {
+      return done(err);
+    }
+  });
+};
+
 const getUsers = (request, response) => {
   pool.query('SELECT * FROM users ORDER BY id ASC', (error, results) => {
     if (error) {
-      console.error('Error getting users:', error.message);
+      console.error('Error executing query:', error.message);
       response.status(500).json({ error: 'Internal Server Error' });
       return;
     }
-    response.status(200).json(results.rows)
-  })
-}
+    response.status(200).json(results.rows);
+  });
+};
 
 const getUserById = (request, response) => {
   const id = parseInt(request.params.id)
@@ -188,9 +246,11 @@ const deleteUser = (request, response) => {
 }
 
 module.exports = {
+  getPool: () => pool,
   getUsers,
   getUserById,
   createUser,
   updateUser,
   deleteUser,
-}
+  initializePassport,
+};
